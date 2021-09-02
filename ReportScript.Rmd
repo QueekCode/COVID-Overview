@@ -1,0 +1,670 @@
+---
+title: "COVID Pandemic Overview"
+author: "PRAETOR"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    source_code: embed
+---
+
+```{r setup, include=FALSE}
+
+library(flexdashboard)
+library(readr)
+library(magrittr)
+library(tidyverse)
+library(tidyr)
+library(ggplot2)
+library(ggmap)
+library(plotly)
+library(shiny)
+### COVID-RELATED INFO
+
+## Info about US COVID demographics divided by state
+aug20us_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports_us/08-20-2021.csv"
+aug20us_csv <- read_csv(url(aug20us_url))
+aug20us <- aug20us_csv[-c(3, 10, 14, 15, 40, 45, 53), c(1, 6, 7, 11, 12, 14, 15, 17)]
+aug20us$Country <- "United States"
+aug20us <- aggregate(aug20us[,c(2:3)], by = list(aug20us$Country), FUN = sum)
+aug20us$Incident_Rate <- NA
+aug20us$Case_Fatality_Ratio <- aug20us$Deaths/aug20us$Confirmed*100
+colnames(aug20us)[1] <- "Country Name"
+
+## Worldwide covid cases and mortality updated august 20 
+aug20_url <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports/08-20-2021.csv"
+aug20_csv <- read_csv(url(aug20_url))
+
+aug20_1 <- aug20_csv[c(3, 4, 8, 9, 12:14)]
+
+aug20 <- aggregate(aug20_1[,c(3,4,6,7)], by = list(aug20_1$Country_Region), FUN = sum)
+aug20 <- aug20 %>%
+  select(!Case_Fatality_Ratio) %>% # Original column had some missing values - remove column
+  mutate(Case_Fatality_Ratio = Deaths/Confirmed*100) %>% # Add back column by manually calculating
+  filter(!Confirmed < 500) # Remove samples that are too small
+
+colnames(aug20)[1] <- "Country Name"
+
+aug20 <- rbind(aug20, aug20us)
+
+# Case fatality ratio = confirmed deaths / confirmed cases
+# Incident rate = cases per 100 000 people
+
+### SOCIOECONOMIC INFO
+
+## Each country's GDP in USD, from WorldBank
+# Don't use this, it's total GDP so it shouldn't have much correlation, use per capita GDP (PPP) ####
+# Last updated: July 30, 2021
+gdp_csv <- read_csv("data/gdp.csv")
+
+gdp <- gdp_csv[, c(1 ,2 ,22 ,23)]
+
+## Total population
+pop_csv <- read_csv("data/population.csv")
+pop <- pop_csv[,c(1,5)]
+colnames(pop)[2] <- "2020_pop"
+
+## Each country's purchasing power parity (PPP), WorldBank
+# Last updated: July 30, 2021
+ppp_csv <- read_csv("data/GDP_PPP.csv")
+ppp <- ppp_csv[, c(1,2,31:34)]
+
+## Each country's income, from WorldBank
+# Last updated: July 30, 2021
+# Grouped into high, middle or low income
+income_csv <- read_csv("data/worldbank_income.csv")
+income <- income_csv[,-6]
+
+## Each country's poverty rates
+# Last updated: July 30, 2021
+# Poverty headcount ratio at $1.90 a day (2011 PPP) (% of population)
+poverty_csv <- read_csv("data/poverty_world.csv")
+# This really has little to no information, can someone fill in the 2020 column with the most recent poverty rate and see if it's worth anything? ####
+
+## GINI index of each country - income inequality WITHIN a country
+# Last updated: July 30, 2021
+gini_csv <- read_csv("data/gini_index.csv")
+# This really has little to no information, can someone fill in the 2020 column with the most recent poverty rate and see if it's worth anything? ####
+
+# Population density (people per sq. km of land area)
+# Last updated: July 30, 2021
+popdensity_csv <- read_csv("data/pop_density.csv")
+# No 2019, 2020 data so 2018 is used
+popdensity <- popdensity_csv[, c(1, 2, 40)]
+colnames(popdensity)[3] <- "2018_pop_density"
+# Population ages 65 and above (% of total population)
+# Last updated: July 30, 2021
+seniors_csv <- read_csv("data/seniors.csv")
+seniors <- seniors_csv[, c(1, 2, 41, 42)]
+
+# Current health expenditure per capita (current US$)
+# Last updated: July 30, 2021
+healthexp_pc_csv <- read_csv("data/health_exp_pc.csv")
+# No 2019, 2020 data so 2018 is used
+hthexp_pc <- healthexp_pc_csv[, c(1, 2, 21)]
+colnames(hthexp_pc)[3] <- "2018_hthexp_pc"
+# Current health expenditure (% of GDP)
+# Last updated: July 30, 2021
+healthexp_gdp_csv <- read_csv("data/health_exp_gdp.csv")
+# No 2019, 2020 data so 2018 is used
+hthexp_gdp <- healthexp_gdp_csv[, c(1, 2, 21)]
+colnames(hthexp_gdp)[3] <- "2018_hthexp_gdp"
+
+### Aggregated data
+joined_table <- aug20 %>%      # datasets without 2019 & 2020 data or with too many missing values are not joined 
+  inner_join(gdp, by = "Country Name") %>%
+  inner_join(income, by = "Country Code") %>%
+  inner_join(ppp, by = "Country Name", suffix = c("_GDP", "_PPP")) %>%
+  inner_join(seniors, by = "Country Name") %>%
+  select(-c(6, 11, 12,13)) 
+
+colnames(joined_table)[c(10:11,15:16)] <- c("2017_PPP", "2018_PPP", "2019_seniors", "2020_seniors") 
+
+joined_data <- joined_table %>%   # joined with most of the datasets except for gini_csv & poverty_csv wich have too many NA
+  inner_join(popdensity, by = "Country Name") %>%
+  inner_join(hthexp_pc, by = "Country Name") %>%
+  inner_join(hthexp_gdp, by = "Country Name") %>%
+  select(-c(14, 17, 19)) %>% #delete redundant country_code columns
+  inner_join(pop, by = "Country Name")
+
+# Only include the most recent year from each data frame  
+joined_data <- subset(joined_data, select = c(1, 2, 3, 4, 5, 7, 8, 9, 13, 15, 16, 17, 18, 19, 20)) 
+joined_data <- subset(joined_data, select = c(7, 1, 13, 2:6, 8, 9:12, 14, 15)) # rearrange the sequence of columns for better visualization
+colnames(joined_data)[3] <- "Country Code" #rename "Country code.x" to "Country Code"
+
+# creating extra columns for the region calculations
+joined_data$`2020_senior_count` <- joined_data$`2020_seniors`*0.01*joined_data$`2020_pop`
+joined_data$`2018_total_hthexp` <- joined_data$`2018_hthexp_pc`*joined_data$`2020_pop`
+joined_data$Incident_Rate <- joined_data$Confirmed/joined_data$`2020_pop`*100000
+
+joined_data$IncomeGroup <- factor(joined_data$IncomeGroup, levels = c("Low income","Lower middle income", "Upper middle income", "High income"))
+
+region_data_mean <- joined_data[,c(1,4,5,8,15:17)]
+region_data_mean <- aggregate(region_data_mean[, c(2:7)], by = list(region_data_mean$Region), FUN = sum, na.rm = T)
+region_data_mean <- region_data_mean %>%
+  mutate(Incident_Rate = Confirmed/`2020_pop`*100000) %>%
+  mutate(Case_Fatality_Ratio = Deaths/Confirmed*100) %>%
+  mutate(PPP = `2020_GDP`/`2020_pop`) %>%
+  mutate(`%_pop_Seniors` = `2020_senior_count`/`2020_pop`*100) %>%
+  mutate(`2018_Hthexp_pc` = `2018_total_hthexp`/`2020_pop`) %>%
+  mutate(`2018_Hthexp_%gdp` = `2018_total_hthexp`/`2020_GDP`*100) %>%
+  select(!2:7)
+
+region_data_sum <- aggregate(joined_data[,c(4,5,8,14:16)], by = list(joined_data$Region), FUN = sum, na.rm = T)
+
+region_data <- region_data_mean %>%
+  inner_join(region_data_sum, by = "Group.1") %>%
+  rename(Region = Group.1)
+```
+
+
+
+Project Overview
+==========================
+
+Col {data-width=280, data-height=1000}
+-------------
+###
+
+```{r, echo=F}
+# Confirmed Cases and Deaths
+conf_death_jd <- arrange(joined_data, Confirmed) %>%
+  mutate(Confirmed = log(Confirmed)) %>%
+  mutate(Deaths = log(Deaths))
+conf_death <- plot_ly(
+  y = conf_death_jd$Deaths,
+  x = conf_death_jd$Confirmed,
+  type = "scatter",
+  mode = "markers"
+) %>%
+  layout(title = "Confirmed COVID-19 Cases versus Deaths", xaxis = list(title = "Ln of Confirmed Cases"), yaxis = list(title = "Ln of Confirmed Deaths"))
+conf_death
+```
+
+Col {data-width=720}
+-------------
+
+### 
+**Introduction**
+<br/>
+  This project investigates the correlation between various socioeconomic and health-related predictors and COVID-19 incidence and mortality. This scatter plot compares the total confirmed COVID-19 cases as the independent variable and the total confirmed deaths as the dependent variable. It is clear that there is a strong, positive, linear relationship between these two variables. This shows that mortality rate remains somewhat consistent across countries, regardless of the number of cases that there are. 
+	While this is an obvious and expected relationship, there are numerous other factors that affect the prevalence and mortality rate of COVID-19. This is explored in the next few pages of the report.
+
+**Hypothesis**
+<br/>
+  It is logical to expect that COVID-19 incident rate and mortality should be higher in more densely populated countries and lower income countries. Disease spread should be more rapid and more difficult to contain in smaller, more populus areas. Furthermore, disease containment and treatment should be easier in wealthier countries, therefore it's expected that they should have lower incident and mortality rates.
+
+**Data Collection**
+<br/>
+All of the data was collected from WorldBank and Johns Hopkins. The COVID confirmed cases and deaths data was collected on August 20th, 2021 from Johns Hopkins and is last updated as of that date. Incident rate and case fatality ratio were calculated based on this data. All community health data frames and socioeconomic data frames were collected from WorldBank and were last updated July 30, 2021. 
+All analyses were conducted using the most recent data available. Data pertaining to health expenditures per capita, health expenditure as a percentage of total GDP, total health expenditures and population density were from 2018. Data pertaining to GDP, PPP, senior population and total population were from 2020. 
+
+**Data Cleaning**
+<br/>
+Countries with less than 500 confirmed cases were filtered out as the sample was too small. Rows with missing data were kept in the data frame then excluded in calculations. If all rows with any missing data were removed, there would have been too many rows removed from the data frame. Data about poverty rates and Gini coefficients was collected but was omitted from analyses due to high missingness of data.
+
+\* *Note: The most recent years of data available were utilized
+
+
+### Description of Data
+
+**Region:** General geographic region. *(Johns Hopkins University)*
+<br/>
+**Country name:** Name of country or jurisdiction. *(Johns Hopkins University)*
+<br/>
+**Country Code:** 3-letter code of country or jurisdiction. *(Johns Hopkins University)*
+<br/>
+**Confirmed:** Total number of confirmed COVID-19 cases. *(Johns Hopkins University)*
+<br/>
+**Deaths:** Total number of confirmed COVID-19. *(Johns Hopkins University)*
+<br/>
+**Incident Rate:** Total number of confirmed COVID-19 cases (NOT only concurrent or active cases, but cases that occurred at any time) per 100 000 persons. The incident rate describes the prevalence of COVID-19 in a country. This is unaffected by population, thus this metric can be compared between countries whereas total cases cannot. *(WorldBank)*
+<br/>
+**Case Fatality Ratio:** Percentage of confirmed COVID-19 cases that have resulted in death. This variable is calculated by taking Deaths/Confirmed\*100. *(Johns Hopkins University)*
+<br/>
+**2020 Gross domestic product:** National gross domestic product (GDP) in 2020, measured in USD. This is the sum of all products produced in a country in a year. *(WorldBank)*
+<br/>
+**Income Group:** Purchasing power parity (PPP) in comparison to other jurisdictions globally. There are 4 groups, "High income", "Upper middle income", "Lower middle income" and "Low income". *(WorldBank)*
+<br/>
+**2020 Purchasing Power Parity:** Purchasing power parity in 2020, measured in USD. *(WorldBank)*
+<br/>
+**2020 Seniors as a Percentage of Population:** People aged 65 and above as a percentage of total national population in 2020, counting all residents regardless of citizenship status. *(WorldBank)*
+<br/>
+**2018 Population Density:** Average national population density in 2018. This is calculated by taking the midyear population and divided by the country's land area in square kilometres. *(WorldBank)*
+<br/>
+**2018 Health Expenditure per Capita:** Health expenditure per capita in 2018, in USD. This includes all healthcare goods and services spent in 2018. 2019 and 2020 data were unavailable, thus 2018 data is used to indicate the average spending patterns on health care in a country. *(WorldBank)*
+<br/>
+**2018 Health Expenditure as a Percentage of GDP:** Total health expenditures as a percentage of national GDP in 2018. *(WorldBank)*
+<br/>
+**2018 Total Health Expenditures:** Total national health expenditures in 2018, in USD. *(WorldBank)*
+<br/>
+**2020 Population:** Total national population in 2020, all residents are counted, regardless of citizenship status. *(WorldBank)*
+<br/>
+**2020 Senior Population:** Total national population of people aged 65 and above in 2020. *(WorldBank)*
+<br/>
+
+
+Global Overview
+==============================
+
+Col {data-width=800, .tabset}
+----------------------------
+### COVID Cases
+``` {r, echo = FALSE}
+LongLat = read.csv("data/LongLat.csv", fileEncoding = "UTF-8-BOM")
+ContinentCountry = read.csv("data/ContinentCountry.csv")
+ContinentCountry$Country[ContinentCountry$Country == "US"] = "United States"
+df = inner_join(LongLat, ContinentCountry, by = "Country") %>%
+  inner_join(joined_data, by = c("Country" = "Country Name"))
+
+world = map_data("world")
+
+ggplot(df, aes(x = longitude, y = latitude))+
+  geom_point(aes(size = Confirmed, color = Case_Fatality_Ratio))+
+  geom_path(data = world, aes(x = long, y = lat, group = group))+
+  scale_color_gradient2(low = "#33bc1d", mid = "#f364ff", high = "#f364ff", midpoint = 7)+
+  theme_gray() +
+  labs(
+    y = "Latitude",
+    x = "Longitude",
+    color = "Fatality \nRatio", 
+    size = "Confirmed\nCases"
+  )+
+  guides(
+    color = guide_colorbar(order = 1),
+    size = guide_legend(order = 0)
+  )
+```
+
+### Distribution of Seniors
+```{r, echo = FALSE}
+ggplot(df, aes(x = longitude, y = latitude))+
+  geom_point(aes(size = `2020_senior_count`, color = `2020_seniors`))+
+  geom_path(data = world, aes(x = long, y = lat, group = group))+
+  scale_color_gradient2(low = "#ffe135", mid = "#ffe135", high = "#e60000", midpoint = 10)+
+  theme_gray() +
+  labs(
+    y = "Latitude",
+    x = "Longitude",
+    color = "% Seniors", 
+    size = "Senior \nPopulation"
+  )
+
+```
+
+### Healthcare Expenditure
+```{r, echo = FALSE}
+ggplot(df, aes(x = longitude, y = latitude))+
+  geom_point(aes(size = `2018_total_hthexp`, color = `2020_PPP`))+
+  geom_path(data = world, aes(x = long, y = lat, group = group))+
+  scale_color_gradient2(low = "#ff2052", mid = "#2ed22e", 
+                        high = "#2ed22e", 
+                        midpoint = 60000)+
+  theme_gray() +
+  labs(
+    y = "Latitude",
+    x = "Longitude",
+    color = "Purchasing \nPower \nParity", 
+    size = "Total\nHealthcare\nExpenditure"
+  )
+
+```
+
+
+Col {data-width=200}
+----------------------------
+###
+Fatality ratios seems to be reasonable for most regions; higher ratios can be observed in Mexico, Peru, Ecuador, Bolivia, Hungary, Bulgaria, China, Indonesia, Afghanistan, and an alarmingly high number of Sub-Saharan African nations. No region with high volumes of confirmed cases report excessive fatality ratios. Perhaps there may be reasonable opportunities for foreign aid support programs in areas with high fatality ratios. Confirmed cases were found to be incredibly low for China despite Wuhan being the reported source of the initial COVID outbreak; limitations in data may be explained by a region being overwhelmed or failing to investigate and report cases (Sanmarchi et al., 2021). Reality may be that there are far more cases than confirmed in China (Wadhams and Jacobs, 2020). The current sample may not be representative of the population within China suffering from COVID, and the true fatality ratio may differ from the currently sampled one. In media, Iran has been reported to suffer excessively due to the outbreak and limitations in the country's healthcare systems (Kia, 2021). Absence of data leaves the study unable to confirm nor contradict the nation's currently reported situation. Absence of data from Russia is also noted.
+
+COVID has been found to express higher mortality rates among seniors (Ho et al., 2020). In culmination to there being moderately sized populations of seniors within Europe, North America, and Japan, these regions have a high percentage of seniors within their total populations. If there were to be uncontrolled outbreaks of COVID in these senior populations, such as within elderly care homes, the regions would have their total population more heavily impacted. 
+
+Western Europe, Saudi Arabia, Qatar, North America, and Australia hold the highest purchasing power parities; other nations may struggle in comparison regarding resource allocation for their senior demographics. Total healthcare expenditure is dominated by the United States and Western Europe. Expected since these regions host the largest markets in medical devices and pharmaceuticals.
+
+
+Effects of Senior Populations
+==============================
+
+Column {data-width=800, .tabset}
+---------
+
+
+
+
+### Seniors vs Incident Rate
+
+```{r echo = F}
+## BOXPLOT: Seniors as a % of Population (in quartiles) vs Incident Rate
+senior_jd <- joined_data %>%
+  select(2,6,11)
+senior_jd$senior_dist <- ifelse(senior_jd$`2020_seniors` < 3.298, "Quartile 1", 
+                                ifelse(senior_jd$`2020_seniors` < 7, "Quartile 2",
+                                       ifelse(senior_jd$`2020_seniors` < 15.170, "Quartile 3", "Quartile 4")))
+senior_bp <- plot_ly(
+  y = senior_jd[senior_jd$senior_dist == "Quartile 1",]$Incident_Rate,
+  type = "box",
+  name = "Quartile 1",
+  boxpoints = "all",
+  jitter = 1,
+  pointpos = 0
+)
+senior_bp <- senior_bp %>%
+  add_trace(y = senior_jd[senior_jd$senior_dist == "Quartile 2",]$Incident_Rate, name = "Quartile 2") %>%
+  add_trace(y = senior_jd[senior_jd$senior_dist == "Quartile 3",]$Incident_Rate, name = "Quartile 3") %>%
+  add_trace(y = senior_jd[senior_jd$senior_dist == "Quartile 4",]$Incident_Rate, name = "Quartile 4") %>%
+  layout(title = "Seniors as a Percentage of Country's Population and COVID-19 Incident Rate", xaxis = list(title = "Seniors as a Percentage of Total Population"), yaxis = list(title = "Incident Rate per 100 000 people"))
+senior_bp 
+```
+
+
+### Seniors vs PPP
+
+```{r echo = F}
+## BOXPLOT: PPP (in quartiles) vs Incident Rate
+ppp_seniors <- joined_data %>%
+  select(2,10, 11)
+ppp_seniors$senior_dist <- ifelse(senior_jd$`2020_seniors` < 3.298, "Quartile 1", 
+                                  ifelse(senior_jd$`2020_seniors` < 7, "Quartile 2",
+                                         ifelse(senior_jd$`2020_seniors` < 15.170, "Quartile 3", "Quartile 4")))
+ppp_seniors_bp <- plot_ly(
+  y = ppp_seniors[ppp_seniors$senior_dist == "Quartile 1",]$`2020_PPP`,
+  type = "box",
+  name = "Quartile 1",
+  boxpoints = "all",
+  jitter = 1,
+  pointpos = 0
+)
+ppp_seniors_bp <- ppp_seniors_bp %>%
+  add_trace(y = ppp_seniors[ppp_seniors$senior_dist == "Quartile 2",]$`2020_PPP`, name = "Quartile 2") %>%
+  add_trace(y = ppp_seniors[ppp_seniors$senior_dist == "Quartile 3",]$`2020_PPP`, name = "Quartile 3") %>%
+  add_trace(y = ppp_seniors[ppp_seniors$senior_dist == "Quartile 4",]$`2020_PPP`, name = "Quartile 4") %>%
+  layout(title = "National Purchasing Power Parity versus Seniors as a Percentage of Country's Population", xaxis = list(title = "Seniors as a Percentage of Population Quartiles"), yaxis = list(title = "National Purchasing Power Parity (USD)"))
+ppp_seniors_bp
+```
+
+
+### PPP vs Incident Rate
+
+```{r echo = F}
+## BOXPLOT: PPP (in quartiles) vs Incident Rate
+ppp_ir <- joined_data %>%
+  select(2,6,10)
+ppp_ir$ppp_dist <- ifelse(ppp_ir$`2020_PPP` < 5134.7, "Quartile 1", 
+                          ifelse(ppp_ir$`2020_PPP` < 13001.5, "Quartile 2",
+                                 ifelse(ppp_ir$`2020_PPP` < 28003.2, "Quartile 3", "Quartile 4")))
+ppp_ir_bp <- plot_ly(
+  y = ppp_ir[ppp_ir$ppp_dist == "Quartile 1",]$Incident_Rate,
+  type = "box",
+  name = "Quartile 1",
+  boxpoints = "all",
+  jitter = 1,
+  pointpos = 0
+)
+ppp_ir_bp <- ppp_ir_bp %>%
+  add_trace(y = ppp_ir[ppp_ir$ppp_dist == "Quartile 2",]$Incident_Rate, name = "Quartile 2") %>%
+  add_trace(y = ppp_ir[ppp_ir$ppp_dist == "Quartile 3",]$Incident_Rate, name = "Quartile 3") %>%
+  add_trace(y = ppp_ir[ppp_ir$ppp_dist == "Quartile 4",]$Incident_Rate, name = "Quartile 4") %>%
+  layout(title = "Purchasing Power Parity versus COVID-19 Incident Rate", xaxis = list(title = "Purchasing Power Parity Quartiles"), yaxis = list(title = "Incident Rate per 100 000"))
+ppp_ir_bp
+```
+
+
+Column {data-width=200}
+-----------
+
+###
+  These three box plots are created using combinations of three variables; seniors as a percentage of total population, PPP and incident rate. Upon preliminary investigation, it was observed that PPP and incident rate were positively related to one another, as seen in the third box plot. This goes against the original hypothesis that the incident rate should be higher in lower-income countries. 
+
+  To further investigate why this is occurring, analysis was conducted with more variables. It was observed that prevalence of seniors in a population is positively related to both PPP and incident rate, shown in the first and second box plots. This explains the positive correlation between PPP and incident rate. As seen in the plots, the prevalence of seniors is the independent variable, affecting both PPP and incident rate in a population. Due to this, all three variables have a positive relationship. PPP and health expenditures also had very strong correlation to prevalence of seniors and weak correlation with incident rate. This relationship is explored on the next page. 
+  
+  While wealth should be able to prevent some disease spread, it is evident that the prevalence of seniors in the population has a stronger effect on disease spread. 
+
+
+
+Wealth and Health Expenditure
+==============================
+
+Column {data-width=800, .tabset}
+---------
+
+
+### Health Expenditure and PPP
+
+```{r echo = F}
+## AREA PLOT : x = country, y = Health Expenditure per Capita, y = Incident Rate
+area_df <- na.omit(joined_data[,c(2, 6, 10, 11, 13)])
+area_df <- arrange(area_df, `2020_PPP`)
+ppp_hthexp <- plot_ly(
+  x = reorder(area_df$`Country Name`, area_df$`2020_PPP`),
+  y = area_df$`2020_PPP`, type = "scatter" , mode = "lines" , fill = "tozeroy",
+  name = "PPP"
+)
+ppp_hthexp <- ppp_hthexp %>%
+  add_trace(y = area_df$`2018_hthexp_pc`, name = "Health Expenditures per Capita") %>%
+  layout(title = "National Purchasing Power Parity and Health Expenditures", xaxis = list(title = "Countries"), yaxis = list(title = "Purchasing Power Parity (USD)"))
+ppp_hthexp
+```
+
+### PPP vs Incident Rate
+
+```{r echo = F}
+# Scatter plot with incident rate and PPP
+plot_ly(data = joined_data) %>%
+  add_trace(y = log(joined_data$Incident_Rate), x = log(joined_data$`2020_PPP`), type = "scatter") %>%
+  layout(title = "Incident Rate versus PPP", yaxis = list(title = "Ln of Incident Rate"), xaxis = list(title = "Ln of PPP"))
+```
+
+
+### Incident Rate vs Health Expenditure Per Capita
+
+```{r echo = F}
+# Scatter plot with incident rate and hth exp
+plot_ly(data = joined_data) %>%
+  add_trace(y = log(joined_data$Incident_Rate), x = log(joined_data$`2018_hthexp_pc`), type = "scatter") %>%
+  layout(title = "Incident Rate vs Health Expenditure Per Capita", xaxis = list(title = "Ln of Health Expenditure Per Capita"), yaxis = list(title = "Ln of Incident Rate"))
+```
+
+Column {data-width=200}
+-----------
+
+###
+  With the increase in PPP, health expenditures per capita generally also increases, as seen in the area plot. Logically, it should be expected that with an increase in health spending, there should be a decrease in the prevalence of COVID-19. 
+  
+  These scatter plots show the opposite, as the incident rate is seen to be positively related to both PPP and health expenditure per capita. The first scatter plot uses the same variables as the third box plot on the previous page. The purpose of including these scatter plots is to show the linearity of the relationship between the variables. Incident rate is seen to be loosely positively correlated to metrics of wealth. Referring back to the relationship between the senior population and increased wealth, one can deduce again that this increased incident rate with increasing wealth is due to the effect of the senior population. 
+
+  While increasing health expenditures should generally result in a population with greater health, it also results in an aging population. Due to this, the incident rate of COVID-19 is actually higher in wealthier countries, as the senior population is the most vulnerable to COVID-19.
+
+
+
+
+Wealth and Incident Rates
+==============================
+
+Column {data-width=800, .tabset}
+----------
+
+### Incident Rate by Region
+
+```{r, echo = F, warning=FALSE}
+plot_ly(data = joined_data, x = reorder(joined_data$Region, -log(joined_data$Incident_Rate)), y = log(joined_data$Incident_Rate), type = "box") %>%
+  layout(title = "Incident Rate by Region", xaxis = list(title = "Region"), yaxis = list(title = "Ln of incident rate"))
+```
+
+### PPP by Region
+```{r, echo = F, warning=FALSE}
+plot_ly(data = joined_data) %>%
+  add_trace(x = reorder(joined_data$Region, -log(joined_data$Incident_Rate)), y = log(joined_data$'2020_PPP'), type = "box") %>%
+  layout(title = "PPP by Region", xaxis = list(title = "Region"), yaxis = list(title = "Ln of Purchasing power parity in 2020"))
+```
+
+Column {data-width=200}
+----------
+
+###
+These two graphs serve as an overview of incidence rate in each region around the world. As one can see from the first graph, according to the median, the incident rate is highest in Europe and lowest in the Sub-Saharan Africa region. 
+
+The second graph represents the purchasing power parity (GDP per capita) in each region. Interestingly, the graph shows that regions that have higher median incident rate in the first graph, also have a generally higher median purchasing power parity. This shows that in general, COVID-19 occurs more frequently the more wealthy a region is.
+
+Effects of Income Level
+==============
+
+
+Column {data-width=800, .tabset}
+----------
+
+### Incident Rate in Different Income Populations
+
+``` {r, echo = F, warning=FALSE}
+joined_data %>%
+  group_by(Region) %>%
+  ggplot() + geom_boxplot(aes(Region, Incident_Rate, col = IncomeGroup)) + scale_y_log10() + labs(title = "Incident Rate in Different Income Populations", x = "Region", y = "Ln of incident rate") + scale_x_discrete(guide = guide_axis(angle = -90))
+```
+
+### Income level versus COVID Prevalence
+
+``` {r, echo = F, warning=FALSE}
+plot_ly(data = joined_data) %>%
+  add_trace(x = reorder(joined_data$IncomeGroup, -log(joined_data$Incident_Rate)), y = log(joined_data$Incident_Rate), type = "box") %>%
+  layout(title = "Income level vs. COVID Prevalence", xaxis = list(title = "Income levels"), yaxis = list(title = "Ln of incident rate"))
+# According to the median number of each boxplot, areas with upper middle income tend to have the highest confirmed case number 
+```
+
+### Income Level versus Case Fatality Ratio
+
+``` {r, echo = F, warning=F}
+joined_data %>%
+  group_by(Region) %>%
+  ggplot() + geom_boxplot(aes(Region, Case_Fatality_Ratio, col = IncomeGroup)) + scale_y_log10() + scale_x_discrete(guide = guide_axis(angle = -90)) + labs(title = "Case fatality ratio in different income populations", x = "Region", y = "Case fatality ratio")
+plot_ly(data = joined_data) %>%
+  add_trace(x = reorder(joined_data$IncomeGroup, -log(joined_data$Incident_Rate)), y = joined_data$Case_Fatality_Ratio, type = "box") %>%
+  layout(title = "Income level vs. Fatality", xaxis = list(title = "Income levels"), yaxis = list(title = "Case fatality ratio"))
+# in most regions populations of  lower middle & upper middle income level tend to have the highest case fatality rate, this is not what we were expecting (populations in higher income level have less confirmed cases & lower fatality rate).
+```
+
+Column {data-width=200}
+----------
+
+###
+  The population in each region was divided based on their income level and plotted against the COVID incident rate. According to the median of each box plot, we found that in every region except for East Asia & Pacific and North America (Due to only having high income countries), there was a positive relationship between income and incidence rate.
+  
+  The second graph (Income level vs COVID prevalence) grouped countries of the same income together regardless of region. The second graph revealed a positive correlation between the income level and incident rate. This supports the findings in the previous pages about the positive relationship between the prevalence of COVID-19 and wealth in a country.
+  
+  On the other hand, unlike the positive correlation between incident rate and income level, we found that the median number of case fatality rate remains somewhat the same in all income levels, but there is slightly lower mortality with higher income level. As shown on the third graph (case fatality ratio in different income populations), population with high income level have the lowest case fatality rate in total with all of the region combined.
+  
+  These findings support the findings of the other pages, as they also found that disease incidence increased with income. However, it is interesting to find that mortality had a mildly negative relationship with income. While incidence and income may be related due to their mutual relationship with population age, the negative correlation between income and fatality rate is much convincing since people with higher income often have access to better medical treatment compared with people with lower income.
+
+Conclusions
+==============================
+
+Column {data-width=750}
+----------
+
+###
+
+**Discussion**
+<br/>
+This project has found that one of the most significant factors in incidence and mortality was the prevalence of seniors in a population. The senior population was also strongly related to economic factors, as an older population was strongly associated with a wealthier nation. It is unclear as to whether the aging population causes the increase in wealth, or the wealth and extra resources allow the population to age more. Regardless, there is a clear relation between the two. PPP, GDP and health expenditures had mild positive correlations with disease but were generally due to their strong correlation with the prevalence of seniors. Total population and population density were found to not be related to COVID-19 prevalence or mortality. 
+<br/>
+
+**Limitations**
+<br/>
+Prevalence of seniors had such a strong effect on other predictors, further research can try to investigate correlations between variables in countries that have the same prevalence of seniors. This way, the effect of the aging population is eliminated and other variables can be explored. After this is done, researchers may find stronger correlations between other variables.
+
+Further, we speculate that even though it is shown that higher income populations tend to have higher incident rates, the incident rate is dependent on the the measures their countries have taken to prevent the spread of COVID, therefore the correlation between income level and incident rate could be false positive. Regional political policies and cultural differences could have a great impact on the spread of COVID-19 as well. Mask mandates, vaccine access, quarantine restrictions and public following of these restrictions plays a major role in disease spread and were not investigated in this project.
+
+Lastly, under reporting in low income and rural areas remains a problem. In the study conducted by Sanmarchi et al., 2021, when compared to mortality rate trends in previous years, in the majority of countries, excess mortality is significantly higher than the number of reported COVID-19 deaths. The greatest difference is seen in Russia, Khazakhstan, Bulgaria, Albania, Serbia, Lithuania, Ecuador, and Mexico, where excess mortality rate is observed to be around double the reported COVID-19 mortality rate (Sanmarchi et al., 2021). This inaccuracy in reporting poses a major problem in data analysis.
+
+**Literature Review**
+<br/>
+Kontis et al., 2020 and Bilinski and Emanuel, 2020, found that amongst countries in the OECD, Spain experienced the highest percentage increase in deaths as of May and September of 2020, respectively (Kontis et al., 2020) (Bilinski and Emanuel, 2020). Sanmarchi et al., 2021 also found that Spain had high excess mortality rates in relation to other countries by December 2020 (Sanmarchi et al., 2021). While there is some variability, these studies also found that the US, Belgium, and Italy experienced high increases in mortality rates as well. This is reflected in the data analyzed in this project as well, as these countries continue their pattern of increasing mortality **(Table 1)**. Certain countries consistently had high COVID-19 incidence and mortality through the pandemic and many of them are highly developed and wealthy. Our findings are in correspondence with the literature and shows that disease spread and mortality occurs irrespective of wealth, as there are numerous other factors affecting it as well. 
+
+In the literature, excess mortality rate is calculated by subtracting pre-pandemic national mortality rate from national mortality rate during the pandemic. This yields the excess number of deaths caused by COVID-19. Excess mortality rate in this project is calculated by the incident rate per 100 000 multiplied by the mortality rate.
+
+**Table 1.** Estimated Excess Mortality Rate (COVID-19 mortality rate) per 100 000 people in developed countries with leading mortality rates at the start of the pandemic.
+
+| | **Kontis et al.** <br/> *(Until end of May 2020)* | **Bilinski and Emanuel** <br/> *(Until Sept. 19, 2020)* |  **Sanmarchi et al.**<br/> *(Until Dec. 31, 2020)* |  **Praetor** <br/>*(Until August 20, 2021)* |
+|:--------------|:----------------|:-----------------|:------------------|:------------------|
+| **Spain** | 90 - 102 |	102.1 | 65 | 175.6 |
+| **Belgium** | 70 | 86.8 | 103 | 219.1 |
+|**United States**  | *NA* | 60.3 | 77 | 189.7 |
+| **Italy** | 70 | 59.1 | 67 | 216.1 |
+-----------------------------
+
+
+**Conclusion**
+<br/>
+In conclusion, this analysis found that one of the strongest predictors of COVID-19 incidence was the prevalence of seniors in the population. Future research should be conducted focusing on the senior population and disease spread and mortality. Furthermore, research should be conducted on the positive relationship between incidence rate to wealth, political policies and culture.
+
+```{r}
+
+```
+
+Column {data-width=250}
+----------
+### References
+Bilinski, A., & Emanuel, E. J. (2020). COVID-19 and Excess All-Cause Mortality in the US and 18 Comparison Countries. JAMA, 324(20), 2100–2102. https://doi.org/10.1001/jama.2020.20717
+
+Ho, F. K., Petermann-Rocha, F., Gray, S. R., Jani, B. D., Katikireddi, S. V., Niedzwiedz, C. L., Foster, H., Hastie, C. E., Mackay, D. F., Gill, J. M. R., O’Donnell, C., Welsh, P., Mair, F., Sattar, N., Celis-Morales, C. A., & Pell, J. P. (2020). Is older age associated with COVID-19 mortality in the absence of other risk factors? General population cohort study of 470,034 participants. PLOS ONE, 15(11), e0241824. https://doi.org/10.1371/journal.pone.0241824
+
+Ioannidis, J. P. A. (2020). Global perspective of COVID‐19 epidemiology for a full‐cycle pandemic. European Journal of Clinical Investigation, e13423. https://doi.org/10.1111/eci.13423
+
+Kia, S. (2021, August 25). Iran covid-19 crisis: State media acknowledge the death toll is above 700,000. NCRI. https://www.ncr-iran.org/en/news/iran-covid-19-crisis-state-media-acknowledge-the-death-toll-is-above-700000/. 
+
+Kontis, V., Bennett, J. E., Rashid, T., Parks, R. M., Pearson-Stuttard, J., Guillot, M., Asaria, P., Zhou, B., Battaglini, M., Corsetti, G., McKee, M., Di Cesare, M., Mathers, C. D., & Ezzati, M. (2020). Magnitude, demographics and dynamics of the effect of the first wave of the COVID-19 pandemic on all-cause mortality in 21 industrialized countries. Nature Medicine, 26(12), 1919–1928. https://doi.org/10.1038/s41591-020-1112-0
+
+Sanmarchi, F., Golinelli, D., Lenzi, J., Esposito, F., Capodici, A., Reno, C., & Gibertoni, D. (2021). Exploring the Gap Between Excess Mortality and COVID-19 Deaths in 67 Countries. JAMA Network Open, 4(7), e2117359–e2117359. https://doi.org/10.1001/jamanetworkopen.2021.17359
+
+Wadhams, N., Jacobs, J. (2020, April 2). China intentionally Under-reported total coronavirus cases and DEATHS, U.S. intelligence says. Fortune. https://fortune.com/2020/04/01/china-coronavirus-cases-deaths-total-under-report-cover-up-covid-19/. 
+
+
+About
+==============================
+
+Col {data-width=330}
+----------------------------
+### 
+```{r, out.width="87%", fig.align="center"}
+  knitr::include_graphics("Images/Kevin.jpg")
+
+```
+<center>
+<font size = 10>
+**Kevin Schubert**\
+</font>
+<font size = 5>
+**[LinkedIn](https://www.linkedin.com/in/kevin-schubert/)**
+</font>
+</center>
+
+Col {data-width=340}
+----------------------------
+###
+
+```{r, out.width="87%", fig.align="center"}
+  knitr::include_graphics("Images/Vivian.jpg")
+
+```
+<center>
+<font size = 10>
+**Vivian Pan**\
+</font>
+<font size = 5>
+**[LinkedIn](https://www.linkedin.com/in/vivianpan99/)**
+</font>
+</center>
+
+Col {data-width=330}
+----------------------------
+###
+
+```{r, out.width="87%", fig.align="center"}
+  knitr::include_graphics("Images/Kaiwen.jpg")
+
+```
+<center>
+<font size = 10>
+**Kaiwen Zhang**\
+</font>
+<font size = 5>
+**[LinkedIn](https://www.linkedin.com/in/kaiwenz/)**
+</font>
+</center>
