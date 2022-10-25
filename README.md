@@ -9,3 +9,13 @@ All of the [data](https://github.com/QueekCode/COVID-Overview/tree/main/data) wa
 [Script can be downloaded here.](https://github.com/QueekCode/COVID-Overview/blob/main/ReportScript.Rmd)
 
 Project completed as part of coursework for MSC2011; goal was to implement techniques in R Markdown to clean data, build a stylized report/dashboard, and assess the proposed hypothesis.
+
+<br>
+
+**Contributors:**
+
+Kevin Schubert
+
+Vivian Pan
+
+Kaiwen Zhang
